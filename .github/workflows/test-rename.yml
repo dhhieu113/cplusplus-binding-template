@@ -1,0 +1,403 @@
+name: CI - Test Renaming Scripts and NuGet Package
+
+on:
+  push:
+    branches: [ master, main ]
+    paths:
+      - 'rename_project.*'
+  pull_request:
+    branches: [ master, main ]
+    paths:
+      - 'rename_project.*'
+  workflow_dispatch:
+
+# Add default permissions to the workflow
+permissions:
+  contents: write   # Needed for creating releases
+  packages: write   # Needed for publishing packages
+
+jobs:
+  test-rename-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run rename_project.bat in test mode
+        run: |
+          echo "BamBo" | PowerShell -Command ".\rename_project.bat -test"
+          
+      - name: Run rename_project.ps1 in test mode
+        run: |
+          PowerShell -File .\rename_project.ps1 -TestMode "BamBo" "BamBoCompany"
+          
+      - name: Verify renamed files
+        run: |
+          if (Test-Path "include/bambo/bambo.h") {
+            echo "✅ Header file correctly renamed"
+          } else {
+            echo "❌ Header file rename failed"
+            exit 1
+          }
+          
+          if (Test-Path "src/bambo/bambo.cpp") {
+            echo "✅ Source file correctly renamed"
+          } else {
+            echo "❌ Source file rename failed"
+            exit 1
+          }
+          
+          if (Test-Path "bambo_dotnet_shim.cpp") {
+            echo "✅ Shim file correctly renamed"
+          } else {
+            echo "❌ Shim file rename failed"
+            exit 1
+          }
+          
+          if ((Get-Content "CMakeLists.txt") -match "project\(bambo LANGUAGES CXX\)") {
+            echo "✅ CMakeLists.txt correctly updated"
+          } else {
+            echo "❌ CMakeLists.txt update failed"
+            exit 1
+          }
+        shell: powershell
+
+  test-rename-unix:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+      fail-fast: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Make script executable
+        run: chmod +x ./rename_project.sh
+
+      - name: Run rename_project.sh in test mode
+        run: |
+          echo -e "BamBo\nBamBoCompany\ny" | ./rename_project.sh --test
+          
+      - name: Run PowerShell script in test mode (if available)
+        run: |
+          if command -v pwsh &> /dev/null; then
+            pwsh -File ./rename_project.ps1 -TestMode "BamBo" "BamBoCompany"
+            echo "✅ PowerShell script test completed"
+          else
+            echo "⚠️ PowerShell Core not available, skipping PS1 test"
+          fi
+          
+      - name: Verify renamed files
+        run: |
+          if [ -f "include/bambo/bambo.h" ]; then
+            echo "✅ Header file correctly renamed"
+          else
+            echo "❌ Header file rename failed"
+            exit 1
+          fi
+          
+          if [ -f "src/bambo/bambo.cpp" ]; then
+            echo "✅ Source file correctly renamed"
+          else
+            echo "❌ Source file rename failed"
+            exit 1
+          fi
+          
+          if [ -f "bambo_dotnet_shim.cpp" ]; then
+            echo "✅ Shim file correctly renamed"
+          else
+            echo "❌ Shim file rename failed"
+            exit 1
+          fi
+          
+          if grep -q "project(bambo LANGUAGES CXX)" CMakeLists.txt; then
+            echo "✅ CMakeLists.txt correctly updated"
+          else
+            echo "❌ CMakeLists.txt update failed"
+            exit 1
+          fi
+            
+  build-native:
+    needs: [test-rename-windows, test-rename-unix]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        build_type: [Release]
+      fail-fast: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Apply rename for testing
+        if: runner.os == 'Windows'
+        run: |
+          echo "BamBo" | PowerShell -Command ".\rename_project.bat -test"
+        shell: cmd
+      
+      - name: Apply rename for testing (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          chmod +x ./rename_project.sh
+          echo -e "BamBo\nBamBoCompany\ny" | ./rename_project.sh --test
+        shell: bash
+
+      - name: Get submodules (if any)
+        run: git submodule update --init --recursive
+
+      - name: Setup CMake
+        uses: jwlawson/actions-setup-cmake@v1
+        with:
+          cmake-version: '3.26.0'
+
+      - name: Configure (CMake)
+        run: |
+          mkdir -p build
+          cd build
+          cmake -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} ..
+
+      - name: Build (CMake)
+        run: |
+          cd build
+          cmake --build . --config ${{ matrix.build_type }} --parallel
+
+      - name: Run tests (ctest) if present
+        run: |
+          cd build
+          if [ -f CTestTestfile.cmake ] ; then
+            ctest --output-on-failure -C ${{ matrix.build_type }}
+          else
+            echo "No tests configured (no CTestTestfile.cmake found)."
+          fi
+        shell: bash
+        
+      - name: Collect build artifacts
+        run: |
+          mkdir -p artifacts
+          
+          # Define the runtime identifier based on OS
+          case "${{ matrix.os }}" in
+            ubuntu-latest) RID="linux-x64" ;;
+            macos-latest)  RID="osx-arm64" ;;
+            windows-latest) RID="win-x64" ;;
+          esac
+          
+          # Create runtime-specific directory
+          mkdir -p "artifacts/runtimes/$RID/native"
+          
+          # Copy native libraries to the correct runtime folder
+          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
+            find build -name "*.dll" -type f -exec cp {} "artifacts/runtimes/$RID/native/" \; 2>/dev/null || true
+            find build -name "*.lib" -type f -exec cp {} "artifacts/runtimes/$RID/native/" \; 2>/dev/null || true
+          elif [[ "${{ matrix.os }}" == "ubuntu-latest" ]]; then
+            find build -name "*.so*" -type f -exec cp {} "artifacts/runtimes/$RID/native/" \; 2>/dev/null || true
+            find build -name "*.a" -type f -exec cp {} "artifacts/runtimes/$RID/native/" \; 2>/dev/null || true
+          elif [[ "${{ matrix.os }}" == "macos-latest" ]]; then
+            find build -name "*.dylib" -type f -exec cp {} "artifacts/runtimes/$RID/native/" \; 2>/dev/null || true
+            find build -name "*.a" -type f -exec cp {} "artifacts/runtimes/$RID/native/" \; 2>/dev/null || true
+          fi
+          
+          echo "Artifacts collected for $RID:"
+          ls -la "artifacts/runtimes/$RID/native/" || echo "No native libraries found"
+        shell: bash
+
+      - name: Upload native libraries
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ matrix.os }}
+          path: artifacts/runtimes/
+
+  build-nuget:
+    needs: build-native
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Apply rename for testing
+        run: |
+          chmod +x ./rename_project.sh
+          echo -e "BamBo\nBamBoCompany\ny" | ./rename_project.sh --test
+        shell: bash
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v3
+        with:
+          dotnet-version: '6.0.x'
+
+      - name: Download all native libraries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: native-*
+          path: native-libs
+
+      - name: Organize native libraries for NuGet
+        run: |
+          # Create the runtimes directory structure
+          mkdir -p bin/Release/runtimes
+          
+          # Copy all runtime folders from different OS builds
+          echo "Downloaded artifacts structure:"
+          find native-libs -type f -name "*" | head -20
+          
+          # Move native libraries to the correct location
+          # Support both layouts:
+          #   A) native-<os>/runtimes/<rid>/native/*
+          #   B) native-<os>/<rid>/native/*
+          for os_dir in native-libs/native-*; do
+            # Determine source root
+            if [ -d "$os_dir/runtimes" ]; then
+              src_root="$os_dir/runtimes"
+            else
+              src_root="$os_dir"
+            fi
+
+            # Copy known RIDs if present
+            for rid in linux-x64 osx-arm64 osx-x64 win-x64; do
+              if [ -d "$src_root/$rid/native" ]; then
+                mkdir -p "bin/Release/runtimes/$rid/native"
+                # Copy native libs preserving filenames
+                cp -r "$src_root/$rid/native/"* "bin/Release/runtimes/$rid/native/" 2>/dev/null || true
+                echo "Copied native libraries for $rid from $src_root"
+              fi
+            done
+          done
+          
+          # Verify the structure
+          echo "Final runtimes structure:"
+          find bin/Release/runtimes -type f | sort
+          
+          # Check that we have libraries for all platforms
+          for rid in linux-x64 osx-arm64 osx-x64 win-x64; do
+            if [ -d "bin/Release/runtimes/$rid/native" ]; then
+              echo "✅ Found native libraries for $rid"
+              ls -la "bin/Release/runtimes/$rid/native/"
+            else
+              echo "⚠️ Missing native libraries for $rid"
+            fi
+          done
+        shell: bash
+
+      - name: Build .NET project
+        run: |
+          dotnet restore dotnet/BamBo.csproj
+          dotnet build dotnet/BamBo.csproj --configuration Release --no-restore
+
+      - name: Pack NuGet package
+        run: |
+          # Use a test version
+          VERSION="1.0.0-test.$(date +%s)"
+          echo "Building test version $VERSION"
+          
+          # Pack the NuGet package with all native libraries
+          dotnet pack dotnet/BamBo.csproj \
+            --configuration Release \
+            --no-build \
+            -p:Version=$VERSION \
+            -p:PackageId="BamBoCompany.BamBo" \
+            --output nupkgs
+          
+          # Verify the package contents
+          echo "NuGet package created:"
+          ls -la nupkgs/
+          
+          # Extract and inspect the package structure
+          mkdir -p package-inspection
+          unzip -l nupkgs/*.nupkg | head -50
+        shell: bash
+
+      - name: Upload NuGet package
+        uses: actions/upload-artifact@v4
+        with:
+          name: nuget-package-bambo
+          path: nupkgs/*.nupkg
+
+  test-nuget:
+    needs: build-nuget
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Apply rename for testing
+        if: runner.os == 'Windows'
+        run: |
+          echo "BamBo" | PowerShell -Command ".\rename_project.bat -test"
+        shell: cmd
+      
+      - name: Apply rename for testing (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          chmod +x ./rename_project.sh
+          echo -e "BamBo\nBamBoCompany\ny" | ./rename_project.sh --test
+        shell: bash
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v3
+        with:
+          dotnet-version: '6.0.x'
+
+      - name: Download NuGet package
+        uses: actions/download-artifact@v4
+        with:
+          name: nuget-package-bambo
+          path: test-package
+
+      - name: Test NuGet package installation
+        run: |
+          # Create a test project
+          mkdir test-project
+          cd test-project
+          dotnet new console --framework net6.0
+          
+          # Add the local package source
+          dotnet nuget add source ../test-package --name local-test
+          
+          # Get the package name
+          PACKAGE_FILE=$(ls ../test-package/*.nupkg | head -1)
+          PACKAGE_NAME="BamBoCompany.BamBo"
+          
+          echo "Installing package: $PACKAGE_NAME from $PACKAGE_FILE"
+          
+          # Install the package
+          dotnet add package "$PACKAGE_NAME" --source ../test-package --prerelease
+          
+          # Create a test Program.cs that uses the library
+          cat > Program.cs << 'EOL'
+          using System;
+          using BamBo;
+
+          namespace BamBoTest
+          {
+              class Program
+              {
+                  static void Main(string[] args)
+                  {
+                      try {
+                          Console.WriteLine("Testing BamBo library...");
+                          var provider = new BamBoProvider();
+                          var result = provider.GetHelloWorld();
+                          Console.WriteLine($"Result: {result}");
+                          Console.WriteLine("Test successful!");
+                      }
+                      catch (Exception ex) {
+                          Console.WriteLine($"Error: {ex.Message}");
+                          Environment.Exit(1);
+                      }
+                  }
+              }
+          }
+          EOL
+          
+          # Build the test project to ensure package works
+          dotnet build
+          
+          # Run to verify the native library loads properly
+          dotnet run
+          
+          echo "✅ Package successfully installed and project builds on ${{ matrix.os }}"
+        shell: bash
