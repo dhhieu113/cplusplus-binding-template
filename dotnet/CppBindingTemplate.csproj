@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <GenerateTargetFrameworkAttribute>false</GenerateTargetFrameworkAttribute>
+    
+    <!-- Enable runtime information -->
+    <RuntimeIdentifiers>win-x64;linux-x64;osx-x64</RuntimeIdentifiers>
+    <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+    <Title>CppBindingTemplate</Title>
+    <Description>.NET binding for the CppBindingTemplate C++ library that demonstrates cross-platform Hello World functionality</Description>
+    <Authors>yourname</Authors>
+    <PackageId>YourName.CppBindingTemplate</PackageId>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageLicenseFile>LICENSE</PackageLicenseFile>
+    <PackageProjectUrl>https://github.com/yourname/cppbindingtemplate</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/yourname/cppbindingtemplate</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageTags>cpp-binding;template;hello-world</PackageTags>
+    <Version>1.0.0</Version> <!-- Default version, overridden by CI when built from tag -->
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <Platforms>x64</Platforms>
+  </PropertyGroup>
+  
+  <ItemGroup>
+    <!-- Include native libraries in the NuGet package -->
+    <Content Include="..\bin\Release\runtimes\**\*.*" Pack="true" PackagePath="runtimes">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    
+    <!-- Include the README and LICENSE in the package -->
+    <None Include="..\README.md" Pack="true" PackagePath="\" />
+    <None Include="..\LICENSE" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+</Project>
