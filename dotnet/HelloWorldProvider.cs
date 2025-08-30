@@ -76,26 +76,13 @@ namespace CppBindingTemplate
         /// <returns>A string containing the Hello World message.</returns>
         public static string GetHelloWorld()
         {
-            try
-            {
-                // Print current directory and check if DLL exists
-                Console.WriteLine($"Current directory: {Directory.GetCurrentDirectory()}");
-                string dllPath = Path.Combine(Directory.GetCurrentDirectory(), "runtimes", "win-x64", "native", "cppbindingtemplate_dotnet.dll");
-                Console.WriteLine($"Looking for DLL at: {dllPath}");
-                Console.WriteLine($"DLL exists: {File.Exists(dllPath)}");
-                
-                IntPtr ptr = HelloWorld();
-                if (ptr == IntPtr.Zero)
-                    return "Failed to get Hello World message";
+            IntPtr resultPtr = HelloWorld();
+            if (resultPtr == IntPtr.Zero)
+                return string.Empty;
 
-                string result = Marshal.PtrToStringAnsi(ptr);
-                FreeHelloWorldString(ptr);
-                return result;
-            }
-            catch (Exception ex)
-            {
-                return $"Error: {ex.Message}";
-            }
+            string result = Marshal.PtrToStringAnsi(resultPtr);
+            FreeHelloWorldString(resultPtr);
+            return result;
         }
 
         [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
